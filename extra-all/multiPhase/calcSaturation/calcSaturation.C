@@ -1,8 +1,8 @@
-/*---------------------------------------------------------------------------* \
+/*---------------------------------------------------------------------------*\
   =========                 |
   \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
    \\    /   O peration     |
-    \\  /    A nd           | Copyright (C) 1991-2010 OpenCFD Ltd.
+    \\  /    A nd           | Copyright (C) 2004-2010 OpenCFD Ltd.
      \\/     M anipulation  |
 -------------------------------------------------------------------------------
 License
@@ -22,22 +22,19 @@ License
     along with OpenFOAM.  If not, see <http://www.gnu.org/licenses/>.
 
 Application
-    uprime
+    calcSaturation
 
 Description
-    Calculates and writes the scalar field of uprime (sqrt(2/3 k)).
-
-    The -noWrite option just outputs the max/min values without writing
-    the field.
+    Calculates the layered saturation for combined particle/VoF filtration
 
 \*---------------------------------------------------------------------------*/
 
 #include "fvCFD.H"
-//#include "fvc.H"
-//#include "interfaceProperties.H"
-//#include "twoPhaseMixture.H"
-#include "typeInfo.H"
-#include "oilParticleCloud.H"
+#include "sampledIsoSurface.H"
+#include "interpolationCellPoint.H"
+#include "vtkSurfaceWriter.H"
+#include "oilParticle.H"
+#include "Cloud.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -45,29 +42,101 @@ int main(int argc, char *argv[])
 {
     timeSelector::addOptions();
 
-//    #include "addRegionOption.H"
+    bool gnuplotFormat = true; // plot each time as unbroken group, double spaced at end. First value is time
 
+    argList::validArgs.append("nSections"); 
 //    argList::addBoolOption
 //    (
-//        "compressible",
-//        "calculate compressible y+"
+//        "tagDroplets",
+//        "tag contiguous droplets - not implemented (yet!)"
 //    );
+//   argList::validArgs.append("Udir");// define flow direction - not implemented 
+//   argList::validArgs.append("deadLength");// length of mesh in flow-dir not included as filter - not implemented 
 
-    #include "setRootCase.H"
-    #include "createTime.H"
+
+
+#   include "setRootCase.H"
+#   include "createTime.H"
+
     instantList timeDirs = timeSelector::select0(runTime, args);
-//    #include "createNamedMesh.H"
-    #include "createMesh.H"
 
-//    const bool compressible = args.optionFound("compressible");
+    Foam::Info
+        << "Create mesh for time = "
+        << runTime.timeName() << Foam::nl << Foam::endl;
 
-//    bool writeResults = !args.optionFound("noWrite");
+    Foam::fvMesh mesh
+    (
+        Foam::IOobject
+        (
+            Foam::fvMesh::defaultRegion,
+            runTime.timeName(),
+            runTime,
+            Foam::IOobject::MUST_READ
+        )
+    );
 
+    const boundBox &bounds(mesh.bounds());
+    
+    label nSections = args.argRead<label>(1);
+    
+    //total volume
+    scalar emptyVol = bounds.volume();
+    scalar splitLength = bounds.span().z()/nSections;
+    scalar splitVol=bounds.span().x()*bounds.span().y()*splitLength;
+    
+    autoPtr<OFstream> outfileAlphaGP;
+    autoPtr<OFstream> outfileParticlesGP;
+    autoPtr<OFstream> outfileTotalGP;
+    
+    if (gnuplotFormat)
+    {
+        outfileAlphaGP.reset(new OFstream("saturation-alpha-gnuplot.gxy"));
+        outfileParticlesGP.reset(new OFstream("saturation-particles-gnuplot.gxy"));
+        outfileTotalGP.reset(new OFstream("saturation-total-gnuplot.gxy"));
+    }
+    
+    OFstream outfileAlpha("saturation-alpha.gxy");
+    OFstream outfileParticles("saturation-particles.gxy");
+    OFstream outfileTotal("saturation-total.gxy");
+    
+    bool firstWrite = true;
+
+    // Time averages
+    scalar lastTime = -1;
+    List<scalar> avgAlpha(nSections,0.);
+    List<scalar> avgParticles(nSections,0.);
+    List<scalar> avgTotal(nSections,0.);
+    
     forAll(timeDirs, timeI)
     {
         runTime.setTime(timeDirs[timeI], timeI);
+
         Info<< "Time = " << runTime.timeName() << endl;
-        fvMesh::readUpdateState state = mesh.readUpdate();
+        if (firstWrite)
+        {   
+            firstWrite = false;
+        } else {
+            if (gnuplotFormat)
+            {   
+                outfileAlphaGP() << nl << nl << endl;
+                outfileParticlesGP() << nl << nl << endl;
+                outfileTotalGP() << nl << nl << endl;
+            }    
+            outfileAlpha << endl;
+            outfileParticles << endl;
+            outfileTotal << endl;
+        }
+        
+        if (gnuplotFormat)
+        {
+            outfileAlphaGP() << runTime.timeName();
+            outfileParticlesGP() << runTime.timeName();
+            outfileTotalGP() << runTime.timeName();
+        }
+        
+        outfileAlpha << runTime.timeName();
+        outfileParticles << runTime.timeName();
+        outfileTotal << runTime.timeName();
 
         IOobject alpha1header
         (
@@ -77,64 +146,139 @@ int main(int argc, char *argv[])
             IOobject::MUST_READ
         );
 
-        if (alpha1header.headerOk())
+        List<scalar> splitAlpha(nSections,0.);
+        List<scalar> splitParticles(nSections,0.);
+        List<scalar> splitTotal(nSections,0.);
+
+        // Check data exists
+        if ( alpha1header.headerOk())
         {
+
+            mesh.readUpdate(); //update the mesh
+
             Info<< "    Reading alpha1" << endl;
             volScalarField alpha1(alpha1header, mesh);
+            label split = 0;
 
-    Info<< "\nCreating particle cloud" << endl;
-    oilParticleCloud parts(mesh); //,"defaultCloud",false);
-
-            parts.readFields();
-
-            label nParts = 0;
-
-            nParts = parts.size();
-
-            reduce(nParts,sumOp<label>());
-
-            Info << nParts << " particles in cloud" << endl;
-         
-            scalar partVol = 0.;
-
-            forAllIter(Cloud<oilParticle>, parts, pIter)
+            forAll(mesh.C(),cI)
             {
-                oilParticle& p = pIter();
-                partVol += (M_PI/6.) * p.d()  * p.d()  * p.d();
+                split = (mesh.C()[cI].z()-bounds.min().z())/splitLength; //which partition
+                splitAlpha[split] += alpha1.internalField()[cI]*mesh.V()[cI]; //volume of fluid
             }
 
-            reduce(partVol,sumOp<scalar>());
-
-//        Info<< "    Calculating uprime" << endl;
-//        volScalarField uprime
-//        (
-//            IOobject
-//            (
-//                "uprime",
-//                runTime.timeName(),
-//                mesh,
-//                IOobject::NO_READ
-//            ),
-//            sqrt((2.0/3.0)*k)
-//        );
-
-            Info<< "  Mesh Volume (actual)     : " << gSum(mesh.V()) << endl;
-            Info<< "  Fluid Volume (liquid)    : " << gSum(mesh.V() * alpha1.internalField()) << endl;
-            Info<< "  Fluid Volume (particles) : " << partVol << endl;
-            Info<< "  Saturation               : " << (gSum(mesh.V() * alpha1.internalField()) + partVol )/ gSum(mesh.V()) << endl;
-
-//        if (writeResults)
-//        {
-//            uprime.write();
-//        }
         }
         else
         {
-            Info<< "    No alpha1" << endl;
+            Info<< "    No data" << endl;
         }
+
+        // particles, read without reading data
+        Cloud<oilParticle> particles(mesh,"defaultCloud",false);
+        
+        Pout << particles.size() << " particles." <<endl;
+
+        label split = 0;
+        // header for diameter field
+        
+        IOobject dHeader
+        (
+            "d",
+            mesh.time().timeName(),
+            "lagrangian/defaultCloud",
+            mesh,
+            IOobject::MUST_READ,
+            IOobject::NO_WRITE,
+            false
+        );
+        
+        if (dHeader.headerOk())
+        {
+
+            IOField<scalar> d(dHeader);
+
+            label pI = -1;
+         
+            forAllConstIter(Cloud<oilParticle>, particles, p)
+            {
+                pI++;
+                split = (p().position().z()-bounds.min().z())/splitLength;
+                splitParticles[split] += M_PI*d[pI]*d[pI]*d[pI]/6.; 
+            }
+        }
+    
+        scalar splitI = 0;
+    
+        forAll(splitAlpha,sI)
+        {
+            splitI = splitAlpha[sI];
+            Foam::reduce(splitI, sumOp<scalar>());
+            splitAlpha[sI] = splitI;
+        }
+
+        forAll(splitParticles,sI)
+        {
+            splitI = splitParticles[sI];
+            Foam::reduce(splitI, sumOp<scalar>());
+            splitParticles[sI] = splitI;
+        }
+
+        forAll(splitTotal,sI)
+        {
+            splitTotal[sI] = splitAlpha[sI] + splitParticles[sI];
+        }
+        // Calc Averages
+        if (lastTime < 0.)
+        {
+            forAll(avgAlpha,sI)
+            {
+                avgAlpha[sI] = splitAlpha[sI];
+                avgParticles[sI] = splitParticles[sI];
+                avgTotal[sI] = splitTotal[sI];
+            }
+            lastTime = runTime.value();
+        } else {
+            scalar currTime = runTime.value();
+            forAll(avgAlpha,sI)
+            {
+                avgAlpha[sI] += (splitAlpha[sI] - avgAlpha[sI])*(1. - (lastTime/currTime));
+                avgParticles[sI] += (splitParticles[sI] - avgParticles[sI])*(1. - (lastTime/currTime));
+                avgTotal[sI] += (splitTotal[sI] - avgTotal[sI])*(1. - (lastTime/currTime));
+            }
+            lastTime = currTime;
+            
+        }
+            
+        
+        if (gnuplotFormat)
+        {
+            forAll(splitAlpha,sI)
+            {
+                outfileAlphaGP() << nl << (splitAlpha[sI]/splitVol);
+                outfileParticlesGP() << nl << (splitParticles[sI]/splitVol);
+                outfileTotalGP() << nl << (splitTotal[sI]/splitVol);
+            }
+        } 
+
+        forAll(splitAlpha,sI)
+        {
+            outfileAlpha << " " << (splitAlpha[sI]/splitVol);
+            outfileParticles << " " << (splitParticles[sI]/splitVol);
+            outfileTotal << " " << (splitTotal[sI]/splitVol);
+        }
+    
+
+        forAll(avgAlpha,sI)
+        {
+            outfileAlpha << " " << (avgAlpha[sI]/splitVol);
+            outfileParticles << " " << (avgParticles[sI]/splitVol);
+            outfileTotal << " " << (avgTotal[sI]/splitVol);
+        }
+    
+        
+        Info<< endl;
     }
 
-    Info<< "\nEnd\n" << endl;
+    return 0;
 }
 
 

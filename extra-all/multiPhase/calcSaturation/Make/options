@@ -4,20 +4,17 @@ EXE_INC = \
     -I$(LIB_SRC)/sampling/lnInclude \
     -I$(LIB_SRC)/surfMesh/lnInclude \
     -I$(LIB_SRC)/triSurface/lnInclude \
-    -I../../libOilParticle/lnInclude \
-    -I$(LIB_SRC)/transportModels/interfaceProperties/lnInclude \
-    -I$(LIB_SRC)/lagrangian/basic/lnInclude
-/*    -I$(LIB_SRC)/transportModels \
-    -I$(LIB_SRC)/transportModels/incompressible/lnInclude \ */
+    -I$(LIB_SRC)/lagrangian/basic/lnInclude \
+    -I$(LIB_SRC)/../fdrg/particle/libOilParticle/lnInclude
 
 EXE_LIBS = \
-    -L$(FOAM_SITE_LIBBIN) \
     -lfiniteVolume \
+    -lgenericPatchFields \
     -lmeshTools \
     -lsampling \
     -lsurfMesh \
     -ltriSurface \
-    -loilParticle \
-    -llagrangian
-/*        -linterfaceProperties \ 
--lincompressibleTransportModels \ */
+    -llagrangian \
+    -L$(FOAM_SITE_LIBBIN) \
+    -loilParticle
+
