@@ -255,10 +255,12 @@ int main(int argc, char *argv[])
             reduce(sumAlpha1,sumOp<scalar>());
             reduce(Vsum,sumOp<scalar>());
             reduce(centre,sumOp<vector>());
+            centre /= sumAlpha1;
 
             reduce(sumAlpha1Box,sumOp<scalar>());
             reduce(Vboxsum,sumOp<scalar>());
             reduce(boxcentre,sumOp<vector>());
+            boxcentre /= sumAlpha1Box;
             
             Info << "time = " << runTime.timeName() << " alpha1boxVOF = " << (sumAlpha1Box/Vboxsum) << endl;
             
