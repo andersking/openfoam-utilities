@@ -33,7 +33,7 @@ Description
 #include "sampledIsoSurface.H"
 #include "interpolationCellPoint.H"
 #include "vtkSurfaceWriter.H"
-#include "oilParticle.H"
+#include "passiveParticle.H"
 #include "Cloud.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
@@ -45,6 +45,8 @@ int main(int argc, char *argv[])
     bool gnuplotFormat = true; // plot each time as unbroken group, double spaced at end. First value is time
 
     argList::validArgs.append("nSections"); 
+
+// TODO items
 //    argList::addBoolOption
 //    (
 //        "tagDroplets",
@@ -74,6 +76,29 @@ int main(int argc, char *argv[])
             Foam::IOobject::MUST_READ
         )
     );
+
+    IOdictionary transportProperties
+    (
+        IOobject
+        (   
+            "transportProperties", 
+            runTime.constant(),
+            mesh,
+            IOobject::MUST_READ
+        )
+    );
+
+
+    word alphaName("alpha1");
+
+    if (transportProperties.found("phases"))
+    {
+        word phase1Name = wordList(transportProperties.lookup("phases"))[0];
+    
+        alphaName = "alpha."+phase1Name;
+    }
+
+    Info << "Using " << alphaName << " for alphaName." << endl;
 
     const boundBox &bounds(mesh.bounds());
     
@@ -140,7 +165,7 @@ int main(int argc, char *argv[])
 
         IOobject alpha1header
         (
-            "alpha1",
+            alphaName,
             runTime.timeName(),
             mesh,
             IOobject::MUST_READ
@@ -156,7 +181,7 @@ int main(int argc, char *argv[])
 
             mesh.readUpdate(); //update the mesh
 
-            Info<< "    Reading alpha1" << endl;
+            Info<< "    Reading " << alphaName << endl;
             volScalarField alpha1(alpha1header, mesh);
             label split = 0;
 
@@ -173,7 +198,7 @@ int main(int argc, char *argv[])
         }
 
         // particles, read without reading data
-        Cloud<oilParticle> particles(mesh,"defaultCloud",false);
+        Cloud<passiveParticle> particles(mesh,"defaultCloud",false);
         
         Pout << particles.size() << " particles." <<endl;
 
@@ -198,7 +223,7 @@ int main(int argc, char *argv[])
 
             label pI = -1;
          
-            forAllConstIter(Cloud<oilParticle>, particles, p)
+            forAllConstIter(Cloud<passiveParticle>, particles, p)
             {
                 pI++;
                 split = (p().position().z()-bounds.min().z())/splitLength;
