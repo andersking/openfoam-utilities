@@ -41,10 +41,16 @@ int main(int argc, char *argv[])
 {
     timeSelector::addOptions();
 
+    argList::addBoolOption("noOutputFile","Don't write a summary file");
+    argList::addBoolOption("zeroMissing","use (0 0 0) for missing data");
+
+    argList::addOption("outputFilename","<filename>","file to write data to");
+
 #   include "setRootCase.H"
 #   include "createTime.H"
 
     instantList timeDirs = timeSelector::select0(runTime, args);
+    
 
 //#   include "createMesh.H"
 //
@@ -77,6 +83,7 @@ int main(int argc, char *argv[])
         )
     );
 
+
     word alphaName("alpha1");
 
     if (transportProperties.found("phases"))
@@ -84,6 +91,22 @@ int main(int argc, char *argv[])
         word phase1Name = wordList(transportProperties.lookup("phases"))[0];
     
         alphaName = "alpha."+phase1Name;
+    }
+
+    Info << "Using " << alphaName << " for alphaName." << endl;
+
+    fileName outfileName("centre.xy");
+
+    args.optionReadIfPresent("outputFilename",outfileName);
+    bool zeroMissing = args.optionFound("zeroMissing");
+    bool noWriteFile = args.optionFound("noOutputFile");
+
+    autoPtr<OFstream> outfile;
+
+    if (!noWriteFile)
+    {
+        Info << "Writing to " << outfileName << "." << endl;
+        outfile.set(new OFstream(outfileName));
     }
 
     
@@ -117,9 +140,30 @@ int main(int argc, char *argv[])
             vector centre = gSum(((alpha1.internalField()) * mesh.V() * mesh.C())) / gSum(((alpha1.internalField()) * mesh.V()));
 
             Info << "Droplet centre = " << centre << endl;
+
+            if (!noWriteFile)
+            {
+                outfile()
+                    << runTime.timeName() << " "
+                    << centre.x() << " "
+                    << centre.y() << " "
+                    << centre.z() 
+                << endl;
+            }
+                
         }
         else
         {
+            if (zeroMissing && !noWriteFile)
+            {
+                vector centre = vector::zero;
+                outfile()
+                    << runTime.timeName() << " "
+                    << centre.x() << " "
+                    << centre.y() << " "
+                    << centre.z() 
+                << endl;
+            }
             Info<< "    No data" << endl;
         }
 
